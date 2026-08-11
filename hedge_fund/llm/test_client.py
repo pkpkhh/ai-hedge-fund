@@ -24,6 +24,10 @@ def keyed(monkeypatch):
     """Every provider key present, so make_llm gets past its key check."""
     for env_var in PROVIDER_ENV_VARS.values():
         monkeypatch.setenv(env_var, "test-key-not-real")
+    monkeypatch.setenv(
+        "DASHSCOPE_BASE_URL",
+        "https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    )
     monkeypatch.delenv("HEDGE_FUND_LLM_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
 
@@ -69,6 +73,14 @@ def test_kimi_accepts_moonshot_key(monkeypatch):
     monkeypatch.delenv("KIMI_API_KEY", raising=False)
     monkeypatch.setenv("MOONSHOT_API_KEY", "test-key-not-real")
     assert make_llm(_BY_PROVIDER["Kimi"]).model == _BY_PROVIDER["Kimi"]
+
+
+def test_alibaba_requires_regional_base_url(monkeypatch):
+    """A regional API key must not be silently sent to a guessed endpoint."""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key-not-real")
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    with pytest.raises(ValueError, match="DASHSCOPE_BASE_URL"):
+        make_llm(_BY_PROVIDER["Alibaba"])
 
 
 def test_provider_for_reads_the_registry():

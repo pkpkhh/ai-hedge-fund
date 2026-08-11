@@ -1,0 +1,500 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// Market Vote Lab v2 [MVL]
+// One-pane, selectable-mode market-vote toolkit for 2–12 week swing trading.
+// Derived concepts/code from:
+// - e2e4mfck and LucF: Relative Volume at Time
+// - stageanalysis: Mansfield Relative Strength
+// - bharatTrader: rolling Relative Strength
+// - Skyte: weighted "IBD style" relative performance concept
+// - Martin Dual-Benchmark Relative Strength [MRS-DB]
+//
+// Important revisions:
+// - Correct quarterly indexing and relative-return mathematics.
+// - Mansfield is calculated only on a weekly chart to prevent timeframe mixing.
+// - Sector confirmation fails closed when enabled but invalid.
+// - 0–100 MRS value is explicitly a self-history percentile, not an IBD/universe rank.
+// - Leadership, momentum and position are separated into independent states.
+
+//@version=6
+indicator(
+     "Market Vote Lab v2 [MVL]",
+     shorttitle = "MVL v2",
+     overlay = false,
+     max_bars_back = 5000,
+     max_labels_count = 50
+)
+
+// ============================================================================
+// GROUPS / MODE
+// ============================================================================
+string G_MODE  = "0. Display Mode"
+string G_BENCH = "1. Benchmarks"
+string G_MRS   = "2. MRS-DB"
+string G_ROLL  = "3. Rolling RS"
+string G_WRS   = "4. Weighted RS"
+string G_MANS  = "5. Mansfield RS"
+string G_RVOL  = "6. Relative Volume at Time"
+string G_DASH  = "7. Dashboard / Alerts"
+
+string displayMode = input.string(
+     "MRS-DB",
+     "Main mode",
+     options = ["MRS-DB", "Rolling RS", "Weighted RS", "Mansfield RS", "Relative Volume at Time"],
+     group = G_MODE,
+     tooltip = "Only one main scale is displayed at a time. Other metrics remain available in the dashboard."
+)
+
+bool modeMRS = displayMode == "MRS-DB"
+bool modeRolling = displayMode == "Rolling RS"
+bool modeWeighted = displayMode == "Weighted RS"
+bool modeMansfield = displayMode == "Mansfield RS"
+bool modeRelVol = displayMode == "Relative Volume at Time"
+
+// ============================================================================
+// BENCHMARKS
+// ============================================================================
+string primaryChoice = input.string("QQQ", "Primary benchmark", options = ["QQQ", "SPY", "IWM", "Custom"], group = G_BENCH)
+string customPrimary = input.symbol("NASDAQ:QQQ", "Custom primary", group = G_BENCH)
+string sectorChoice = input.string("Semiconductors (SMH)", "Sector benchmark", options = [
+     "OFF",
+     "Semiconductors (SMH)",
+     "Semiconductors alt (SOXX)",
+     "Software (IGV)",
+     "Cybersecurity (CIBR)",
+     "Industrials (XLI)",
+     "Energy (XLE)",
+     "Financials (XLF)",
+     "Custom"
+], group = G_BENCH)
+string customSector = input.symbol("NASDAQ:SMH", "Custom sector ETF", group = G_BENCH)
+
+string primarySymbol = switch primaryChoice
+    "SPY" => "AMEX:SPY"
+    "IWM" => "AMEX:IWM"
+    "Custom" => customPrimary
+    => "NASDAQ:QQQ"
+
+bool useSector = sectorChoice != "OFF"
+string sectorSymbol = switch sectorChoice
+    "Semiconductors alt (SOXX)" => "AMEX:SOXX"
+    "Software (IGV)" => "CBOE:IGV"
+    "Cybersecurity (CIBR)" => "NASDAQ:CIBR"
+    "Industrials (XLI)" => "AMEX:XLI"
+    "Energy (XLE)" => "AMEX:XLE"
+    "Financials (XLF)" => "AMEX:XLF"
+    "Custom" => customSector
+    "OFF" => "NASDAQ:QQQ"
+    => "NASDAQ:SMH"
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+f_fmt(float value) =>
+    na(value) ? "n/a" : str.tostring(value, "#.1")
+
+f_fmtSigned(float value) =>
+    na(value) ? "n/a" : value > 0 ? "+" + str.tostring(value, "#.1") : str.tostring(value, "#.1")
+
+f_safeRelativeReturn(float stockReturn, float benchmarkReturn) =>
+    na(stockReturn) or na(benchmarkReturn) or 1.0 + benchmarkReturn == 0.0
+         ? na
+         : 100.0 * ((1.0 + stockReturn) / (1.0 + benchmarkReturn) - 1.0)
+
+f_dailyReturn(int len) =>
+    na(close[len]) or close[len] == 0.0 ? na : close / close[len] - 1.0
+
+f_weightedQuarterPerformance(int quarterBars) =>
+    float q1 = na(close[quarterBars]) or close[quarterBars] == 0.0 ? na : close / close[quarterBars] - 1.0
+    float q2 = na(close[quarterBars * 2]) or close[quarterBars * 2] == 0.0 ? na : close[quarterBars] / close[quarterBars * 2] - 1.0
+    float q3 = na(close[quarterBars * 3]) or close[quarterBars * 3] == 0.0 ? na : close[quarterBars * 2] / close[quarterBars * 3] - 1.0
+    float q4 = na(close[quarterBars * 4]) or close[quarterBars * 4] == 0.0 ? na : close[quarterBars * 3] / close[quarterBars * 4] - 1.0
+    na(q1) or na(q2) or na(q3) or na(q4) ? na : 0.40 * q1 + 0.20 * q2 + 0.20 * q3 + 0.20 * q4
+
+// ============================================================================
+// DAILY DATA USED BY MULTIPLE MODES
+// ============================================================================
+bool validDailyChart = timeframe.isdaily and timeframe.multiplier == 1
+bool validWeeklyChart = timeframe.isweekly and timeframe.multiplier == 1
+
+// ============================================================================
+// MRS-DB — DUAL-BENCHMARK MULTI-HORIZON RELATIVE MOMENTUM
+// ============================================================================
+int fastLength = input.int(21, "Fast RS length", minval = 5, maxval = 63, group = G_MRS)
+int coreLength = input.int(63, "Core RS length", minval = 21, maxval = 126, group = G_MRS)
+int slowLength = input.int(126, "Structural RS length", minval = 63, maxval = 252, group = G_MRS)
+float fastWeightInput = input.float(30, "Fast weight %", minval = 0, maxval = 100, step = 5, group = G_MRS)
+float coreWeightInput = input.float(50, "Core weight %", minval = 0, maxval = 100, step = 5, group = G_MRS)
+float slowWeightInput = input.float(20, "Structural weight %", minval = 0, maxval = 100, step = 5, group = G_MRS)
+float primaryBlendInput = input.float(65, "Primary benchmark weight %", minval = 0, maxval = 100, step = 5, group = G_MRS)
+float sectorBlendInput = input.float(35, "Sector ETF weight %", minval = 0, maxval = 100, step = 5, group = G_MRS)
+int scoreLookback = input.int(252, "Self-history percentile lookback", minval = 126, maxval = 500, group = G_MRS)
+float leaderThreshold = input.float(80, "Leader percentile threshold", minval = 50, maxval = 99, step = 1, group = G_MRS)
+float emergingThreshold = input.float(65, "Emerging threshold", minval = 40, maxval = 90, step = 1, group = G_MRS)
+float improvingThreshold = input.float(8, "Improving: 20D percentile change", minval = 1, maxval = 30, step = 1, group = G_MRS)
+float weakeningThreshold = input.float(-8, "Weakening: 20D percentile change", minval = -30, maxval = -1, step = 1, group = G_MRS)
+float extendedADRThreshold = input.float(2.5, "Extended above EMA20, in ADR", minval = 1, maxval = 6, step = 0.25, group = G_MRS)
+float pullbackUpperADR = input.float(0.75, "Pullback max above EMA20, in ADR", minval = 0.25, maxval = 2.0, step = 0.25, group = G_MRS)
+float pullbackLowerADR = input.float(-0.30, "Pullback max below EMA20, in ADR", minval = -1.5, maxval = 0, step = 0.05, group = G_MRS)
+float leaderPrimaryFloor = input.float(3.0, "Leader 63D RS vs primary floor %", minval = -5.0, maxval = 20.0, step = 0.5, group = G_MRS)
+float ema20TestADR = input.float(0.30, "EMA20 test band, ADR", minval = 0.10, maxval = 1.0, step = 0.05, group = G_MRS)
+float ema20UndercutADR = input.float(0.75, "EMA20 undercut max, ADR", minval = 0.30, maxval = 2.0, step = 0.05, group = G_MRS)
+float brokenVolumeFactor = input.float(1.2, "Broken: down-volume vs 20D avg", minval = 1.0, maxval = 3.0, step = 0.1, group = G_MRS)
+
+float timeWeightSum = math.max(fastWeightInput + coreWeightInput + slowWeightInput, 0.0001)
+float fastWeight = fastWeightInput / timeWeightSum
+float coreWeight = coreWeightInput / timeWeightSum
+float slowWeight = slowWeightInput / timeWeightSum
+float benchmarkWeightSum = math.max(primaryBlendInput + (useSector ? sectorBlendInput : 0.0), 0.0001)
+float primaryBlend = primaryBlendInput / benchmarkWeightSum
+float sectorBlend = useSector ? sectorBlendInput / benchmarkWeightSum : 0.0
+
+// Returns are calculated independently inside each symbol's daily context.
+float stockFastRet = request.security(syminfo.tickerid, "D", f_dailyReturn(fastLength), lookahead = barmerge.lookahead_off)
+float stockCoreRet = request.security(syminfo.tickerid, "D", f_dailyReturn(coreLength), lookahead = barmerge.lookahead_off)
+float stockSlowRet = request.security(syminfo.tickerid, "D", f_dailyReturn(slowLength), lookahead = barmerge.lookahead_off)
+float primaryFastRet = request.security(primarySymbol, "D", f_dailyReturn(fastLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float primaryCoreRet = request.security(primarySymbol, "D", f_dailyReturn(coreLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float primarySlowRet = request.security(primarySymbol, "D", f_dailyReturn(slowLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float sectorFastRet = request.security(sectorSymbol, "D", f_dailyReturn(fastLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float sectorCoreRet = request.security(sectorSymbol, "D", f_dailyReturn(coreLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float sectorSlowRet = request.security(sectorSymbol, "D", f_dailyReturn(slowLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+
+float primaryFastRS = f_safeRelativeReturn(stockFastRet, primaryFastRet)
+float primaryCoreRS = f_safeRelativeReturn(stockCoreRet, primaryCoreRet)
+float primarySlowRS = f_safeRelativeReturn(stockSlowRet, primarySlowRet)
+float sectorFastRS = f_safeRelativeReturn(stockFastRet, sectorFastRet)
+float sectorCoreRS = f_safeRelativeReturn(stockCoreRet, sectorCoreRet)
+float sectorSlowRS = f_safeRelativeReturn(stockSlowRet, sectorSlowRet)
+
+float primaryRaw = primaryFastRS * fastWeight + primaryCoreRS * coreWeight + primarySlowRS * slowWeight
+float sectorRaw = sectorFastRS * fastWeight + sectorCoreRS * coreWeight + sectorSlowRS * slowWeight
+bool sectorDataValid = not na(sectorFastRS) and not na(sectorCoreRS) and not na(sectorSlowRS)
+bool primaryDataValid = not na(primaryFastRS) and not na(primaryCoreRS) and not na(primarySlowRS)
+
+// Fail closed: if sector confirmation is enabled and invalid, compositeRaw is invalid.
+float compositeRaw = not primaryDataValid ? na : useSector ? sectorDataValid ? primaryBlend * primaryRaw + sectorBlend * sectorRaw : na : primaryRaw
+float scoreRaw = validDailyChart ? ta.percentrank(compositeRaw, scoreLookback) : na
+float compositeRange = validDailyChart ? ta.highest(compositeRaw, scoreLookback) - ta.lowest(compositeRaw, scoreLookback) : na
+bool percentileMeaningful = not na(compositeRange) and compositeRange > 0.0001
+float historicalPercentile = na(scoreRaw) or not percentileMeaningful ? na : math.min(100.0, math.max(0.0, scoreRaw))
+float scoreSignal = ta.ema(historicalPercentile, 5)
+float scoreChange5 = historicalPercentile - historicalPercentile[5]
+float scoreChange20 = historicalPercentile - historicalPercentile[20]
+
+float ema20 = ta.ema(close, 20)
+float sma50 = ta.sma(close, 50)
+float sma200 = ta.sma(close, 200)
+float adr20Pct = ta.sma(low != 0.0 ? 100.0 * (high - low) / low : na, 20)
+float distanceEMA20Pct = ema20 != 0.0 ? 100.0 * (close / ema20 - 1.0) : na
+float extensionADR = adr20Pct > 0.0 ? distanceEMA20Pct / adr20Pct : na
+float avgVolume20 = ta.sma(volume, 20)
+float avgVolume5 = ta.sma(volume, 5)
+bool absoluteTrendOK = validDailyChart and close > ema20 and ema20 > sma50 and close > sma200 and sma50 > sma50[5]
+bool primaryConfirmation = primaryDataValid and primaryCoreRS >= leaderPrimaryFloor
+bool sectorConfirmation = not useSector ? true : sectorDataValid and sectorCoreRS > 0
+bool volumeContraction = avgVolume5 < avgVolume20
+bool ema20Rising = ema20 > ema20[5]
+bool mildRsDeterioration = na(scoreChange20) or scoreChange20 > weakeningThreshold
+
+string leadership = not validDailyChart ? "1D REQUIRED" :
+     not primaryDataValid ? "DATA ERROR" :
+     useSector and not sectorDataValid ? "SECTOR DATA ERROR" :
+     not percentileMeaningful ? "INSUFFICIENT HISTORY" :
+     historicalPercentile >= leaderThreshold and primaryConfirmation and sectorConfirmation and absoluteTrendOK ? "LEADER" :
+     historicalPercentile >= emergingThreshold and historicalPercentile < leaderThreshold and scoreChange20 >= improvingThreshold and primaryCoreRS > 0 and (not useSector or sectorCoreRS > 0) and close > sma50 ? "EMERGING" :
+     primaryCoreRS > 0 and close > sma50 ? "WATCH" : "LAGGARD"
+
+string momentum = not validDailyChart or na(scoreChange20) ? "n/a" :
+     scoreChange20 >= improvingThreshold and primaryFastRS > 0 ? "IMPROVING" :
+     scoreChange20 <= weakeningThreshold and primaryFastRS < 0 ? "WEAKENING" : "STABLE"
+
+bool extended = validDailyChart and extensionADR >= extendedADRThreshold
+bool ema20Test = validDailyChart and not na(extensionADR) and math.abs(extensionADR) <= ema20TestADR
+bool ema20Undercut = validDailyChart and not na(extensionADR) and extensionADR < -ema20TestADR and extensionADR >= -ema20UndercutADR
+bool heavyDownVolume = validDailyChart and close < open and avgVolume20 > 0 and volume >= avgVolume20 * brokenVolumeFactor
+bool twoCloseBelow = validDailyChart and close < ema20 and close[1] < ema20[1]
+bool structurallyBroken = validDailyChart and not na(extensionADR) and extensionADR < -ema20UndercutADR and (twoCloseBelow or heavyDownVolume or close < sma50)
+
+bool healthyPullback = validDailyChart and
+     leadership != "LAGGARD" and leadership != "DATA ERROR" and leadership != "SECTOR DATA ERROR" and leadership != "INSUFFICIENT HISTORY" and
+     extensionADR >= pullbackLowerADR and extensionADR <= pullbackUpperADR and
+     close > sma50 and ema20 > sma50 and ema20Rising and volumeContraction and mildRsDeterioration
+
+string positionState = not validDailyChart ? "n/a" :
+     extended ? "EXTENDED" :
+     structurallyBroken ? "BROKEN" :
+     healthyPullback ? "PULLBACK WATCH" :
+     ema20Undercut ? "UNDERCUT" :
+     ema20Test ? "EMA20 TEST" : "NORMAL"
+
+string focusState = not validDailyChart ? "1D CHECK" :
+     leadership == "DATA ERROR" or leadership == "SECTOR DATA ERROR" ? "AVOID" :
+     positionState == "BROKEN" or leadership == "LAGGARD" ? "AVOID" :
+     leadership == "LEADER" and momentum != "WEAKENING" and positionState != "EXTENDED" ? "RESEARCH FOCUS" :
+     leadership == "EMERGING" or healthyPullback or positionState == "EMA20 TEST" or positionState == "UNDERCUT" ? "WATCH" : "WAIT"
+
+// ============================================================================
+// ROLLING RELATIVE STRENGTH — corrected relative return
+// ============================================================================
+int rollingLength = input.int(50, "Rolling period (daily bars)", minval = 5, maxval = 252, group = G_ROLL)
+float stockRollingRet = request.security(syminfo.tickerid, "D", f_dailyReturn(rollingLength), lookahead = barmerge.lookahead_off)
+float primaryRollingRet = request.security(primarySymbol, "D", f_dailyReturn(rollingLength), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float rollingRS = f_safeRelativeReturn(stockRollingRet, primaryRollingRet)
+float rollingRSMA = validDailyChart ? ta.ema(rollingRS, 10) : na
+
+// ============================================================================
+// WEIGHTED QUARTERLY RS — corrected indexing and denominator logic
+// ============================================================================
+int quarterBars = input.int(63, "Quarter length (daily bars)", minval = 40, maxval = 80, group = G_WRS)
+float stockWeightedPerf = request.security(syminfo.tickerid, "D", f_weightedQuarterPerformance(quarterBars), lookahead = barmerge.lookahead_off)
+float primaryWeightedPerf = request.security(primarySymbol, "D", f_weightedQuarterPerformance(quarterBars), lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float weightedRS = f_safeRelativeReturn(stockWeightedPerf, primaryWeightedPerf)
+float weightedRSMA = validDailyChart ? ta.ema(weightedRS, 10) : na
+
+// ============================================================================
+// MANSFIELD RS — strict weekly calculation to avoid mixed-period errors
+// ============================================================================
+int mansfieldLength = input.int(52, "Mansfield MA length (weeks)", minval = 10, maxval = 104, group = G_MANS)
+bool mansfieldOriginal = input.bool(true, "Original zero-line style", group = G_MANS)
+float primaryCloseW = request.security(primarySymbol, "W", close, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float mansfieldRatio = validWeeklyChart and primaryCloseW != 0.0 ? close / primaryCloseW * 100.0 : na
+float mansfieldMA = validWeeklyChart ? ta.sma(mansfieldRatio, mansfieldLength) : na
+float mansfieldRS = validWeeklyChart and mansfieldMA != 0.0 ? 100.0 * (mansfieldRatio / mansfieldMA - 1.0) : na
+float mansfieldDisplay = mansfieldOriginal ? mansfieldRS : mansfieldRatio
+
+// ============================================================================
+// RELATIVE VOLUME AT TIME — US regular-session profile engine
+// - Default session: 09:30–16:00 exchange time.
+// - Compares only with COMPLETED prior sessions.
+// - Current session is excluded from the denominator.
+// - Uses minute-of-day keys, so missing bars do not shift later comparisons.
+// ============================================================================
+string relVolCalcMode = input.string("Cumulative", "Calculation", options = ["Cumulative", "Same bar"], group = G_RVOL)
+string relVolSessionMode = input.string("Regular Session", "Session mode", options = ["Regular Session", "Extended", "Custom"], group = G_RVOL)
+string relVolCustomSession = input.session("0930-1600", "Custom session", group = G_RVOL)
+int relVolLookback = input.int(5, "Completed prior sessions", minval = 3, maxval = 20, group = G_RVOL)
+int relVolMinSamples = input.int(3, "Minimum comparable sessions", minval = 2, maxval = 10, group = G_RVOL)
+int relVolAvgLength = input.int(14, "RVOL average length", minval = 2, maxval = 100, group = G_RVOL)
+float relVolThreshold = input.float(2.0, "Alert threshold", minval = 1.0, maxval = 10.0, step = 0.1, group = G_RVOL)
+bool relVolColorByDirection = input.bool(true, "Color columns by price direction", group = G_RVOL)
+
+string activeSession = relVolSessionMode == "Extended" ? "0400-2000" : relVolSessionMode == "Custom" ? relVolCustomSession : "0930-1600"
+bool validIntraday = timeframe.isintraday
+bool inRvolSession = validIntraday and not na(time(timeframe.period, activeSession))
+bool sessionStart = inRvolSession and (barstate.isfirst or not inRvolSession[1])
+int minuteKey = hour * 60 + minute
+int profileWidth = 1440
+
+var profileCum = array.new_float(relVolLookback * profileWidth, na)
+var profilePoint = array.new_float(relVolLookback * profileWidth, na)
+var profileCellSessionId = array.new_int(relVolLookback * profileWidth, -1)
+var profileCompleted = array.new_bool(relVolLookback, false)
+var slotSessionId = array.new_int(relVolLookback, -1)
+var int currentSessionSlot = 0
+var int sessionSequence = 0
+var bool rvolInitialized = false
+var float currentCumVolume = 0.0
+var bool currentSessionStartedAtBoundary = false
+
+if validIntraday and sessionStart
+    if rvolInitialized
+        // Do not treat a dataset's first partial session as a valid completed comparator.
+        array.set(profileCompleted, currentSessionSlot, currentSessionStartedAtBoundary)
+        currentSessionSlot := (currentSessionSlot + 1) % relVolLookback
+    else
+        rvolInitialized := true
+
+    sessionSequence += 1
+    array.set(slotSessionId, currentSessionSlot, sessionSequence)
+    array.set(profileCompleted, currentSessionSlot, false)
+    currentSessionStartedAtBoundary := not barstate.isfirst
+    currentCumVolume := 0.0
+
+if validIntraday and inRvolSession and rvolInitialized
+    currentCumVolume += volume
+
+float pastCumAverage = na
+float pastPointAverage = na
+int validCumSamples = 0
+int validPointSamples = 0
+float cumSum = 0.0
+float pointSum = 0.0
+
+if validIntraday and inRvolSession and rvolInitialized
+    for slot = 0 to relVolLookback - 1
+        if slot != currentSessionSlot and array.get(profileCompleted, slot)
+            int profileIndex = slot * profileWidth + minuteKey
+            int expectedSessionId = array.get(slotSessionId, slot)
+            bool cellBelongsToSession = expectedSessionId >= 0 and array.get(profileCellSessionId, profileIndex) == expectedSessionId
+            float oldCum = cellBelongsToSession ? array.get(profileCum, profileIndex) : na
+            float oldPoint = cellBelongsToSession ? array.get(profilePoint, profileIndex) : na
+            if not na(oldCum)
+                cumSum += oldCum
+                validCumSamples += 1
+            if not na(oldPoint)
+                pointSum += oldPoint
+                validPointSamples += 1
+
+    pastCumAverage := validCumSamples > 0 ? cumSum / validCumSamples : na
+    pastPointAverage := validPointSamples > 0 ? pointSum / validPointSamples : na
+
+    int writeIndex = currentSessionSlot * profileWidth + minuteKey
+    int currentSessionId = array.get(slotSessionId, currentSessionSlot)
+    array.set(profileCum, writeIndex, currentCumVolume)
+    array.set(profilePoint, writeIndex, volume)
+    array.set(profileCellSessionId, writeIndex, currentSessionId)
+
+int relVolSamples = relVolCalcMode == "Cumulative" ? validCumSamples : validPointSamples
+float currentRelVolValue = relVolCalcMode == "Cumulative" ? currentCumVolume : volume
+float pastRelVolValue = relVolCalcMode == "Cumulative" ? pastCumAverage : pastPointAverage
+float relVol = not validIntraday or not inRvolSession or relVolSamples < relVolMinSamples or na(pastRelVolValue) or pastRelVolValue == 0.0 ? na : currentRelVolValue / pastRelVolValue
+float relVolAverage = ta.ema(relVol, relVolAvgLength)
+string relVolSampleText = str.tostring(relVolSamples) + "/" + str.tostring(relVolLookback) + " sessions"
+
+// ============================================================================
+// MAIN PLOTS — ONLY ONE SCALE AT A TIME
+// ============================================================================
+color mrsColor = positionState == "BROKEN" ? color.red : positionState == "EXTENDED" ? color.orange : momentum == "WEAKENING" ? color.orange : leadership == "LEADER" ? color.lime : leadership == "EMERGING" ? color.aqua : color.silver
+rsColor(float value) => na(value) ? color.gray : value >= 0 ? color.lime : color.red
+color relVolColor = not relVolColorByDirection ? color.aqua : close >= open ? color.teal : color.red
+
+plot(modeMRS and validDailyChart ? historicalPercentile : na, "MRS self-history percentile", color = mrsColor, linewidth = 3)
+plot(modeMRS and validDailyChart ? scoreSignal : na, "MRS 5D signal", color = color.new(color.white, 35), linewidth = 1)
+plot(modeMRS ? leaderThreshold : na, "Leader threshold", color = color.new(color.green, 30), style = plot.style_line)
+plot(modeMRS ? emergingThreshold : na, "Emerging threshold", color = color.new(color.aqua, 40), style = plot.style_line)
+plot(modeMRS ? 50 : na, "MRS neutral", color = color.new(color.gray, 65))
+
+plot(modeRolling ? rollingRS : na, "Rolling RS", color = rsColor(rollingRS), linewidth = 3)
+plot(modeRolling ? rollingRSMA : na, "Rolling RS signal", color = color.new(color.white, 40), linewidth = 1)
+
+plot(modeWeighted ? weightedRS : na, "Weighted RS", color = rsColor(weightedRS), linewidth = 3)
+plot(modeWeighted ? weightedRSMA : na, "Weighted RS signal", color = color.new(color.white, 40), linewidth = 1)
+
+plot(modeMansfield ? mansfieldDisplay : na, "Mansfield RS", color = rsColor(mansfieldOriginal ? mansfieldRS : mansfieldRatio - mansfieldMA), linewidth = 3)
+plot(modeMansfield and not mansfieldOriginal ? mansfieldMA : na, "Mansfield ratio MA", color = color.blue, linewidth = 1)
+
+plot(modeRelVol ? relVol : na, "Relative Volume at Time", color = relVolColor, style = plot.style_columns)
+plot(modeRelVol ? relVolAverage : na, "RVOL average", color = color.new(color.white, 30), linewidth = 2)
+
+plot(modeRolling or modeWeighted or (modeMansfield and mansfieldOriginal) ? 0 : na, "Zero line", color = color.new(color.gray, 45))
+plot(modeRelVol ? 1 : na, "RVOL 1.0", color = color.new(color.gray, 40))
+plot(modeRelVol ? relVolThreshold : na, "RVOL threshold", color = color.new(color.orange, 20))
+
+color paneBackground = modeMRS ?
+     positionState == "BROKEN" ? color.new(color.red, 88) :
+     positionState == "EXTENDED" ? color.new(color.orange, 91) :
+     leadership == "LEADER" ? color.new(color.green, 91) :
+     leadership == "EMERGING" ? color.new(color.teal, 92) :
+     momentum == "WEAKENING" ? color.new(color.orange, 92) : na : na
+bgcolor(paneBackground)
+
+// ============================================================================
+// DASHBOARD — OTHER ENGINES REMAIN VISIBLE WITHOUT SHARING THE MAIN SCALE
+// ============================================================================
+bool showDashboard = input.bool(true, "Show dashboard", group = G_DASH)
+bool confirmedCloseOnly = input.bool(true, "Alerts only after bar close", group = G_DASH)
+string dashboardPosition = input.string("Top Right", "Dashboard position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = G_DASH)
+
+dashPos = dashboardPosition == "Top Left" ? position.top_left :
+     dashboardPosition == "Bottom Right" ? position.bottom_right :
+     dashboardPosition == "Bottom Left" ? position.bottom_left : position.top_right
+
+var table dashboard = table.new(dashPos, 2, 15, border_width = 1, frame_width = 1)
+
+string modeValue = modeMRS ? f_fmt(historicalPercentile) :
+     modeRolling ? f_fmtSigned(rollingRS) + "%" :
+     modeWeighted ? f_fmtSigned(weightedRS) + "%" :
+     modeMansfield ? validWeeklyChart ? f_fmtSigned(mansfieldDisplay) : "1W required" :
+     validIntraday ? not inRvolSession ? "Out of session" : relVolSamples < relVolMinSamples ? "Need history" : f_fmt(relVol) + "x" : "Intraday required"
+
+if barstate.islast and showDashboard
+    table.cell(dashboard, 0, 0, "MVL: " + displayMode, text_color = color.white, bgcolor = color.new(color.blue, 35))
+    table.cell(dashboard, 1, 0, modeValue, text_color = color.white, bgcolor = color.new(color.blue, 35))
+
+    table.cell(dashboard, 0, 1, "Focus state", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 1, focusState, text_color = focusState == "RESEARCH FOCUS" ? color.lime : focusState == "AVOID" ? color.red : color.orange)
+
+    table.cell(dashboard, 0, 2, "Leadership", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 2, leadership, text_color = leadership == "LEADER" ? color.lime : leadership == "EMERGING" ? color.aqua : leadership == "LAGGARD" ? color.red : color.orange)
+
+    table.cell(dashboard, 0, 3, "Momentum", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 3, momentum, text_color = momentum == "IMPROVING" ? color.lime : momentum == "WEAKENING" ? color.orange : chart.fg_color)
+
+    table.cell(dashboard, 0, 4, "Position", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 4, positionState, text_color = positionState == "BROKEN" ? color.red : positionState == "EXTENDED" ? color.orange : positionState == "PULLBACK WATCH" ? color.aqua : positionState == "UNDERCUT" ? color.orange : chart.fg_color)
+
+    table.cell(dashboard, 0, 5, "Historical RS %ile", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 5, validDailyChart ? f_fmt(historicalPercentile) : "1D only", text_color = mrsColor)
+
+    table.cell(dashboard, 0, 6, str.tostring(fastLength) + "D vs " + primaryChoice, text_color = chart.fg_color)
+    table.cell(dashboard, 1, 6, f_fmtSigned(primaryFastRS) + "%", text_color = primaryFastRS >= 0 ? color.lime : color.orange)
+
+    table.cell(dashboard, 0, 7, str.tostring(coreLength) + "D vs " + primaryChoice, text_color = chart.fg_color)
+    table.cell(dashboard, 1, 7, f_fmtSigned(primaryCoreRS) + "%", text_color = primaryCoreRS >= 0 ? color.lime : color.orange)
+
+    table.cell(dashboard, 0, 8, str.tostring(coreLength) + "D vs " + (useSector ? sectorSymbol : "sector OFF"), text_color = chart.fg_color)
+    table.cell(dashboard, 1, 8, not useSector ? "OFF" : not sectorDataValid ? "ERROR" : f_fmtSigned(sectorCoreRS) + "%",
+         text_color = not useSector ? color.gray : not sectorDataValid ? color.red : sectorCoreRS >= 0 ? color.lime : color.orange)
+
+    table.cell(dashboard, 0, 9, "Rolling RS " + str.tostring(rollingLength) + "D", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 9, f_fmtSigned(rollingRS) + "%", text_color = rollingRS >= 0 ? color.lime : color.orange)
+
+    table.cell(dashboard, 0, 10, "Weighted RS", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 10, f_fmtSigned(weightedRS) + "%", text_color = weightedRS >= 0 ? color.lime : color.orange)
+
+    table.cell(dashboard, 0, 11, "Mansfield weekly", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 11, validWeeklyChart ? f_fmtSigned(mansfieldRS) : "Switch to 1W", text_color = validWeeklyChart and mansfieldRS >= 0 ? color.lime : color.gray)
+
+    table.cell(dashboard, 0, 12, "RVOL at time", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 12, not validIntraday ? "Intraday only" : not inRvolSession ? "Out of session" : relVolSamples < relVolMinSamples ? "INSUFFICIENT HISTORY" : f_fmt(relVol) + "x",
+         text_color = not na(relVol) and relVol >= relVolThreshold ? color.lime : chart.fg_color)
+
+    table.cell(dashboard, 0, 13, "RVOL samples", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 13, validIntraday ? relVolSampleText : "n/a", text_color = relVolSamples >= relVolMinSamples ? chart.fg_color : color.orange)
+
+    table.cell(dashboard, 0, 14, "Benchmarks", text_color = chart.fg_color)
+    table.cell(dashboard, 1, 14, primarySymbol + (useSector ? " + " + sectorSymbol : " + sector OFF"), text_color = chart.fg_color)
+
+if barstate.islast and not showDashboard
+    table.clear(dashboard, 0, 0, 1, 14)
+
+// Data Window values without cluttering the active pane.
+plot(compositeRaw, "MRS raw alpha %", display = display.data_window)
+plot(primaryCoreRS, "Core RS vs primary %", display = display.data_window)
+plot(useSector ? sectorCoreRS : na, "Core RS vs sector %", display = display.data_window)
+plot(extensionADR, "EMA20 extension in ADR", display = display.data_window)
+plot(rollingRS, "Rolling RS %", display = display.data_window)
+plot(weightedRS, "Weighted RS %", display = display.data_window)
+plot(relVol, "RVOL at time", display = display.data_window)
+
+// ============================================================================
+// ALERTS
+// Alerts are deliberately gated to the model timeframe:
+// - MRS / Rolling / Weighted: confirmed 1D chart bar only.
+// - Mansfield: confirmed 1W chart bar only.
+// - RVOL: confirmed current intraday bar inside the selected session.
+// ============================================================================
+bool alertGate = not confirmedCloseOnly or barstate.isconfirmed
+bool dailyAlertGate = validDailyChart and alertGate
+bool weeklyAlertGate = validWeeklyChart and alertGate
+bool intradayAlertGate = validIntraday and inRvolSession and alertGate
+
+bool enteredLeader = validDailyChart and leadership == "LEADER" and leadership[1] != "LEADER"
+bool enteredEmerging = validDailyChart and leadership == "EMERGING" and leadership[1] != "EMERGING"
+bool enteredWeakening = validDailyChart and momentum == "WEAKENING" and momentum[1] != "WEAKENING"
+bool enteredExtended = validDailyChart and positionState == "EXTENDED" and positionState[1] != "EXTENDED"
+bool enteredPullback = validDailyChart and positionState == "PULLBACK WATCH" and positionState[1] != "PULLBACK WATCH"
+bool enteredBroken = validDailyChart and positionState == "BROKEN" and positionState[1] != "BROKEN"
+
+alertcondition(dailyAlertGate and enteredLeader, "MVL Leader", "{{ticker}} entered MVL LEADER status on a confirmed daily bar.")
+alertcondition(dailyAlertGate and enteredEmerging, "MVL Emerging", "{{ticker}} entered MVL EMERGING status on a confirmed daily bar.")
+alertcondition(dailyAlertGate and enteredWeakening, "MVL Weakening", "{{ticker}} entered MVL WEAKENING status on a confirmed daily bar.")
+alertcondition(dailyAlertGate and enteredExtended, "MVL Extended", "{{ticker}} entered MVL EXTENDED status on a confirmed daily bar.")
+alertcondition(dailyAlertGate and enteredPullback, "MVL Pullback Watch", "{{ticker}} entered MVL PULLBACK WATCH on a confirmed daily bar.")
+alertcondition(dailyAlertGate and enteredBroken, "MVL Broken", "{{ticker}} entered MVL BROKEN status on a confirmed daily bar.")
+alertcondition(intradayAlertGate and ta.crossover(relVol, relVolThreshold), "MVL RVOL threshold", "{{ticker}} RVOL-at-time crossed the selected threshold on a confirmed intraday bar.")
+alertcondition(dailyAlertGate and ta.crossover(rollingRS, 0), "MVL Rolling RS positive", "{{ticker}} daily rolling RS crossed above zero.")
+alertcondition(dailyAlertGate and ta.crossover(weightedRS, 0), "MVL Weighted RS positive", "{{ticker}} daily weighted RS crossed above zero.")
+alertcondition(weeklyAlertGate and ta.crossover(mansfieldRS, 0), "MVL Mansfield positive", "{{ticker}} Mansfield RS crossed above zero on a confirmed weekly bar.")

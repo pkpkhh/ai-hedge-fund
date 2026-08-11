@@ -27,6 +27,7 @@ Implementation complete for handoff. Final TradingView compiler/runtime verifica
 - S/R score now uses pivot count + capped touches + recency + proximity, so old far-away zones do not dominate only because of many historical touches.
 - S/R break state requires confirmed chart close.
 - Optional risk helper added and kept out of Clean default UI.
+- Structural stop helper uses the lower edge of the nearest support channel, not the upper edge.
 - MVL sector presets added; invalid active sector fails closed.
 - Self-history percentile is explicitly not IBD/universe rank and flat-history cases return insufficient history.
 - Leader requires configurable absolute 63D RS floor vs primary (default +3%).
@@ -34,6 +35,7 @@ Implementation complete for handoff. Final TradingView compiler/runtime verifica
 - Research state renamed RESEARCH FOCUS, not execution/buy.
 - RVOL rewritten around selected session, completed-prior-session denominator, exact minute-of-day matching, sample count and stale-cell protection.
 - First partial dataset session is excluded as a completed RVOL comparator.
+- RVOL session-start detection also keys off a new trading day, so regular-session-only charts still roll sessions correctly.
 - Rolling/Weighted signal EMA is only produced on a 1D chart so intraday repeated daily values do not create a fake 10D smoothing line.
 
 ## Required Codex final verification

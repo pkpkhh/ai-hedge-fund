@@ -1,0 +1,422 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// Swing Structure Toolkit v2 [SST]
+// Integrated and revised for a 2–12 week momentum/swing-trading workflow.
+// Derived concepts/code from:
+// - Fred6724: Mark Minervini overlay
+// - LonesomeTheBlue: Support Resistance Channels
+// - ArmerSchlucker / MikeC / TheScrutiniser / GlinckEastwoot: ADR% concepts
+// Material logic has been simplified, corrected and modularised.
+
+//@version=6
+indicator(
+     "Swing Structure Toolkit v2 [SST]",
+     shorttitle = "SST v2",
+     overlay = true,
+     max_bars_back = 1200,
+     max_lines_count = 300,
+     max_labels_count = 300,
+     max_boxes_count = 120
+)
+
+string G_MA1    = "1. Moving Average 1"
+string G_MA2    = "2. Moving Average 2"
+string G_MA3    = "3. Moving Average 3"
+string G_MA4    = "4. Moving Average 4"
+string G_MA5    = "5. Moving Average 5"
+string G_MA6    = "6. Moving Average 6"
+string G_TREND  = "7. Trend Template / 52W"
+string G_VOL    = "8. Volatility / Extension"
+string G_STRUCT = "9. Price Structure"
+string G_SR     = "10. Support / Resistance Channels"
+string G_RISK   = "11. Execution Plan Helper"
+string G_DASH   = "12. Dashboard / Alerts"
+
+f_source(string choice) =>
+    switch choice
+        "Open"  => open
+        "High"  => high
+        "Low"   => low
+        "HL2"   => hl2
+        "HLC3"  => hlc3
+        "OHLC4" => ohlc4
+        => close
+
+f_ma(float src, int len, string maType) =>
+    switch maType
+        "SMA" => ta.sma(src, len)
+        "WMA" => ta.wma(src, len)
+        "HMA" => ta.hma(src, len)
+        "RMA" => ta.rma(src, len)
+        => ta.ema(src, len)
+
+f_plotStyle(string styleName) =>
+    switch styleName
+        "Stepline" => plot.style_stepline
+        "Circles"  => plot.style_circles
+        => plot.style_line
+
+f_fmt(float value) => na(value) ? "n/a" : str.tostring(value, "#.##")
+f_fmtSigned(float value) => na(value) ? "n/a" : value > 0 ? "+" + str.tostring(value, "#.##") : str.tostring(value, "#.##")
+
+bool ma1Show = input.bool(false, "Show", inline = "a", group = G_MA1)
+string ma1Type = input.string("EMA", "Type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "a", group = G_MA1)
+int ma1Len = input.int(5, "Length", minval = 1, inline = "a", group = G_MA1)
+string ma1SrcChoice = input.string("Close", "Source", options = ["Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4"], inline = "b", group = G_MA1)
+color ma1Color = input.color(color.purple, "Color", inline = "b", group = G_MA1)
+int ma1Width = input.int(1, "Width", minval = 1, maxval = 4, inline = "c", group = G_MA1)
+string ma1Style = input.string("Line", "Style", options = ["Line", "Stepline", "Circles"], inline = "c", group = G_MA1)
+
+bool ma2Show = input.bool(true, "Show", inline = "a", group = G_MA2)
+string ma2Type = input.string("EMA", "Type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "a", group = G_MA2)
+int ma2Len = input.int(10, "Length", minval = 1, inline = "a", group = G_MA2)
+string ma2SrcChoice = input.string("Close", "Source", options = ["Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4"], inline = "b", group = G_MA2)
+color ma2Color = input.color(color.orange, "Color", inline = "b", group = G_MA2)
+int ma2Width = input.int(1, "Width", minval = 1, maxval = 4, inline = "c", group = G_MA2)
+string ma2Style = input.string("Line", "Style", options = ["Line", "Stepline", "Circles"], inline = "c", group = G_MA2)
+
+bool ma3Show = input.bool(true, "Show", inline = "a", group = G_MA3)
+string ma3Type = input.string("EMA", "Type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "a", group = G_MA3)
+int ma3Len = input.int(20, "Length", minval = 1, inline = "a", group = G_MA3)
+string ma3SrcChoice = input.string("Close", "Source", options = ["Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4"], inline = "b", group = G_MA3)
+color ma3Color = input.color(color.aqua, "Color", inline = "b", group = G_MA3)
+int ma3Width = input.int(2, "Width", minval = 1, maxval = 4, inline = "c", group = G_MA3)
+string ma3Style = input.string("Line", "Style", options = ["Line", "Stepline", "Circles"], inline = "c", group = G_MA3)
+
+bool ma4Show = input.bool(true, "Show", inline = "a", group = G_MA4)
+string ma4Type = input.string("SMA", "Type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "a", group = G_MA4)
+int ma4Len = input.int(50, "Length", minval = 1, inline = "a", group = G_MA4)
+string ma4SrcChoice = input.string("Close", "Source", options = ["Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4"], inline = "b", group = G_MA4)
+color ma4Color = input.color(color.rgb(44, 138, 216), "Color", inline = "b", group = G_MA4)
+int ma4Width = input.int(2, "Width", minval = 1, maxval = 4, inline = "c", group = G_MA4)
+string ma4Style = input.string("Line", "Style", options = ["Line", "Stepline", "Circles"], inline = "c", group = G_MA4)
+
+bool ma5Show = input.bool(false, "Show", inline = "a", group = G_MA5)
+string ma5Type = input.string("SMA", "Type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "a", group = G_MA5)
+int ma5Len = input.int(150, "Length", minval = 1, inline = "a", group = G_MA5)
+string ma5SrcChoice = input.string("Close", "Source", options = ["Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4"], inline = "b", group = G_MA5)
+color ma5Color = input.color(color.lime, "Color", inline = "b", group = G_MA5)
+int ma5Width = input.int(1, "Width", minval = 1, maxval = 4, inline = "c", group = G_MA5)
+string ma5Style = input.string("Line", "Style", options = ["Line", "Stepline", "Circles"], inline = "c", group = G_MA5)
+
+bool ma6Show = input.bool(true, "Show", inline = "a", group = G_MA6)
+string ma6Type = input.string("SMA", "Type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "a", group = G_MA6)
+int ma6Len = input.int(200, "Length", minval = 1, inline = "a", group = G_MA6)
+string ma6SrcChoice = input.string("Close", "Source", options = ["Close", "Open", "High", "Low", "HL2", "HLC3", "OHLC4"], inline = "b", group = G_MA6)
+color ma6Color = input.color(color.red, "Color", inline = "b", group = G_MA6)
+int ma6Width = input.int(2, "Width", minval = 1, maxval = 4, inline = "c", group = G_MA6)
+string ma6Style = input.string("Line", "Style", options = ["Line", "Stepline", "Circles"], inline = "c", group = G_MA6)
+
+float ma1 = f_ma(f_source(ma1SrcChoice), ma1Len, ma1Type)
+float ma2 = f_ma(f_source(ma2SrcChoice), ma2Len, ma2Type)
+float ma3 = f_ma(f_source(ma3SrcChoice), ma3Len, ma3Type)
+float ma4 = f_ma(f_source(ma4SrcChoice), ma4Len, ma4Type)
+float ma5 = f_ma(f_source(ma5SrcChoice), ma5Len, ma5Type)
+float ma6 = f_ma(f_source(ma6SrcChoice), ma6Len, ma6Type)
+plot(ma1Show ? ma1 : na, "MA 1", color = ma1Color, linewidth = ma1Width, style = f_plotStyle(ma1Style))
+plot(ma2Show ? ma2 : na, "MA 2", color = ma2Color, linewidth = ma2Width, style = f_plotStyle(ma2Style))
+plot(ma3Show ? ma3 : na, "MA 3", color = ma3Color, linewidth = ma3Width, style = f_plotStyle(ma3Style))
+plot(ma4Show ? ma4 : na, "MA 4", color = ma4Color, linewidth = ma4Width, style = f_plotStyle(ma4Style))
+plot(ma5Show ? ma5 : na, "MA 5", color = ma5Color, linewidth = ma5Width, style = f_plotStyle(ma5Style))
+plot(ma6Show ? ma6 : na, "MA 6", color = ma6Color, linewidth = ma6Width, style = f_plotStyle(ma6Style))
+
+bool showTrendTemplate = input.bool(false, "Show price Trend Template zone", group = G_TREND)
+color trendTemplateColor = input.color(color.new(color.lime, 82), "Template zone color", group = G_TREND)
+bool show52Week = input.bool(false, "Show 52-week high / low", group = G_TREND)
+float dClose = request.security(syminfo.tickerid, "D", close, lookahead = barmerge.lookahead_off)
+float dSma50 = request.security(syminfo.tickerid, "D", ta.sma(close, 50), lookahead = barmerge.lookahead_off)
+float dSma150 = request.security(syminfo.tickerid, "D", ta.sma(close, 150), lookahead = barmerge.lookahead_off)
+float dSma200 = request.security(syminfo.tickerid, "D", ta.sma(close, 200), lookahead = barmerge.lookahead_off)
+float dHigh52 = request.security(syminfo.tickerid, "D", ta.highest(high, 252), lookahead = barmerge.lookahead_off)
+float dLow52 = request.security(syminfo.tickerid, "D", ta.lowest(low, 252), lookahead = barmerge.lookahead_off)
+bool dSma200Rising = request.security(syminfo.tickerid, "D", ta.sma(close, 200) > ta.sma(close, 200)[21], lookahead = barmerge.lookahead_off)
+bool trendTemplate = dClose > dSma150 and dClose > dSma200 and dSma150 > dSma200 and dSma200Rising and dSma50 > dSma150 and dSma50 > dSma200 and dClose > dSma50 and dClose >= dLow52 * 1.30 and dClose >= dHigh52 * 0.75
+pTemplate150 = plot(showTrendTemplate and trendTemplate ? dSma150 : na, "Template SMA150", color = color.new(color.lime, 100))
+pTemplate200 = plot(showTrendTemplate and trendTemplate ? dSma200 : na, "Template SMA200", color = color.new(color.lime, 100))
+fill(pTemplate150, pTemplate200, color = trendTemplateColor, title = "Price Trend Template")
+plot(show52Week ? dHigh52 : na, "52W High", color = color.new(color.green, 25), style = plot.style_stepline)
+plot(show52Week ? dLow52 : na, "52W Low", color = color.new(color.red, 35), style = plot.style_stepline)
+
+bool showExtension = input.bool(false, "Show extension markers / bar color", group = G_VOL)
+string extensionBaseChoice = input.string("EMA20", "Extension base", options = ["EMA10", "EMA20", "Custom"], group = G_VOL)
+string extensionCustomType = input.string("EMA", "Custom base type", options = ["EMA", "SMA", "WMA", "HMA", "RMA"], inline = "cust", group = G_VOL)
+int extensionCustomLen = input.int(20, "Length", minval = 1, inline = "cust", group = G_VOL)
+string extensionMetric = input.string("ADR", "Volatility unit", options = ["ADR", "ATR"], group = G_VOL)
+string extensionPriceSource = input.string("Current Close", "Measure from", options = ["Current Close", "Current High", "Daily Close", "Daily High"], group = G_VOL)
+float extensionThreshold = input.float(2.5, "Extended threshold", minval = 0.5, maxval = 6.0, step = 0.25, group = G_VOL)
+float extremeThreshold = input.float(3.5, "Extreme threshold", minval = 1.0, maxval = 8.0, step = 0.25, group = G_VOL)
+color extendedColor = input.color(color.orange, "Extended color", group = G_VOL)
+color extremeColor = input.color(color.red, "Extreme color", group = G_VOL)
+float dEma10 = request.security(syminfo.tickerid, "D", ta.ema(close, 10), lookahead = barmerge.lookahead_off)
+float dEma20 = request.security(syminfo.tickerid, "D", ta.ema(close, 20), lookahead = barmerge.lookahead_off)
+float dCustomBase = request.security(syminfo.tickerid, "D", f_ma(close, extensionCustomLen, extensionCustomType), lookahead = barmerge.lookahead_off)
+float dAdr20Pct = request.security(syminfo.tickerid, "D", ta.sma(low != 0.0 ? 100.0 * (high - low) / low : na, 20), lookahead = barmerge.lookahead_off)
+float dAtr14 = request.security(syminfo.tickerid, "D", ta.atr(14), lookahead = barmerge.lookahead_off)
+float dLow = request.security(syminfo.tickerid, "D", low, lookahead = barmerge.lookahead_off)
+float dHigh = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
+float dCloseRisk = request.security(syminfo.tickerid, "D", close, lookahead = barmerge.lookahead_off)
+float dailyBaseMA = extensionBaseChoice == "EMA10" ? dEma10 : extensionBaseChoice == "EMA20" ? dEma20 : dCustomBase
+float extensionPrice = extensionPriceSource == "Current High" ? high : extensionPriceSource == "Daily Close" ? dCloseRisk : extensionPriceSource == "Daily High" ? dHigh : close
+float extensionDistancePct = dailyBaseMA != 0.0 ? 100.0 * (extensionPrice / dailyBaseMA - 1.0) : na
+float extensionInADR = not na(dAdr20Pct) and dAdr20Pct > 0.0 ? extensionDistancePct / dAdr20Pct : na
+float extensionInATR = not na(dAtr14) and dAtr14 > 0.0 ? (extensionPrice - dailyBaseMA) / dAtr14 : na
+float extensionUnits = extensionMetric == "ADR" ? extensionInADR : extensionInATR
+bool isExtended = showExtension and extensionUnits >= extensionThreshold
+bool isExtreme = showExtension and extensionUnits >= extremeThreshold
+barcolor(isExtreme ? extremeColor : isExtended ? extendedColor : na, title = "Extension bar color")
+plotshape(showExtension and isExtended and not isExtended[1], title = "Entered extended state", style = shape.triangledown, location = location.abovebar, color = isExtreme ? extremeColor : extendedColor, size = size.tiny, text = "EXT")
+
+bool showInsideDays = input.bool(false, "Inside-bar detector (chart timeframe)", group = G_STRUCT)
+color insideColor = input.color(color.new(color.white, 82), "Inside-day color", group = G_STRUCT)
+bool insideDay = high < high[1] and low > low[1]
+if showInsideDays and insideDay
+    box.new(bar_index - 1, high[1], bar_index, low[1], border_color = color.new(insideColor, 5), bgcolor = insideColor)
+
+bool showWeeklyTight = input.bool(false, "Three-week tight-close detector (weekly chart)", group = G_STRUCT)
+float weeklyCloseToleranceATR = input.float(0.45, "Max 3W close spread / ATR", minval = 0.1, maxval = 1.5, step = 0.05, group = G_STRUCT)
+float weeklyRangeToleranceATR = input.float(1.75, "Max 3W total range / ATR", minval = 0.5, maxval = 4.0, step = 0.05, group = G_STRUCT)
+color weeklyTightColor = input.color(color.new(color.aqua, 84), "Weekly tight box", group = G_STRUCT)
+float weeklyAtr = ta.atr(14)
+float threeCloseSpread = ta.highest(close, 3) - ta.lowest(close, 3)
+float threeWeekRange = ta.highest(high, 3) - ta.lowest(low, 3)
+bool weeklyTightLocal = timeframe.isweekly and threeCloseSpread <= weeklyAtr * weeklyCloseToleranceATR and threeWeekRange <= weeklyAtr * weeklyRangeToleranceATR and close > ta.ema(close, 20)
+bool weeklyTight = request.security(syminfo.tickerid, "W", (ta.highest(close, 3) - ta.lowest(close, 3)) <= ta.atr(14) * weeklyCloseToleranceATR and (ta.highest(high, 3) - ta.lowest(low, 3)) <= ta.atr(14) * weeklyRangeToleranceATR and close > ta.ema(close, 20), lookahead = barmerge.lookahead_off)
+if showWeeklyTight and weeklyTightLocal and not weeklyTightLocal[1]
+    box.new(bar_index - 2, ta.highest(high, 3), bar_index, ta.lowest(low, 3), border_color = color.new(weeklyTightColor, 10), border_style = line.style_dotted, bgcolor = weeklyTightColor)
+
+bool showPivots = input.bool(false, "Pivot H/L labels", group = G_STRUCT)
+bool showPivotPct = input.bool(false, "Show swing % on pivots", group = G_STRUCT)
+int pivotLength = input.int(9, "Pivot left / right bars", minval = 2, maxval = 30, group = G_STRUCT)
+string pivotSourceChoice = input.string("High/Low", "Pivot source", options = ["High/Low", "Close/Open"], group = G_STRUCT)
+color pivotHighColor = input.color(color.red, "Pivot high color", inline = "pcol", group = G_STRUCT)
+color pivotLowColor = input.color(color.lime, "Pivot low color", inline = "pcol", group = G_STRUCT)
+float pivotHighSrc = pivotSourceChoice == "High/Low" ? high : math.max(open, close)
+float pivotLowSrc = pivotSourceChoice == "High/Low" ? low : math.min(open, close)
+float pivotHigh = ta.pivothigh(pivotHighSrc, pivotLength, pivotLength)
+float pivotLow = ta.pivotlow(pivotLowSrc, pivotLength, pivotLength)
+var float lastPivotHigh = na
+var float lastPivotLow = na
+if not na(pivotHigh)
+    float upPct = not na(lastPivotLow) and lastPivotLow != 0.0 ? 100.0 * (pivotHigh / lastPivotLow - 1.0) : na
+    if showPivots
+        string txt = str.tostring(pivotHigh, "#.##") + (showPivotPct and not na(upPct) ? "\n+" + str.tostring(upPct, "#.1") + "%" : "")
+        label.new(bar_index - pivotLength, pivotHigh, txt, style = label.style_label_down, textcolor = pivotHighColor, color = color.new(color.black, 100), size = size.tiny)
+    lastPivotHigh := pivotHigh
+if not na(pivotLow)
+    float downPct = not na(lastPivotHigh) and lastPivotHigh != 0.0 ? 100.0 * (pivotLow / lastPivotHigh - 1.0) : na
+    if showPivots
+        string txt = str.tostring(pivotLow, "#.##") + (showPivotPct and not na(downPct) ? "\n" + str.tostring(downPct, "#.1") + "%" : "")
+        label.new(bar_index - pivotLength, pivotLow, txt, style = label.style_label_up, textcolor = pivotLowColor, color = color.new(color.black, 100), size = size.tiny)
+    lastPivotLow := pivotLow
+
+bool showSR = input.bool(false, "Show support / resistance channels", group = G_SR)
+int srPivotPeriod = input.int(10, "Pivot period", minval = 4, maxval = 30, group = G_SR)
+string srSourceChoice = input.string("Close/Open", "Pivot source", options = ["High/Low", "Close/Open"], group = G_SR)
+string srWidthMode = input.string("ATR", "Channel width mode", options = ["ATR", "Range %"], group = G_SR)
+float srAtrWidth = input.float(0.75, "Maximum width in ATR", minval = 0.25, maxval = 2.0, step = 0.05, group = G_SR)
+float srRangeWidthPct = input.float(2.5, "Maximum width % of 300-bar range", minval = 0.5, maxval = 8.0, step = 0.25, group = G_SR)
+int srMinPivots = input.int(2, "Minimum pivots in channel", minval = 1, maxval = 8, group = G_SR)
+int srMaxChannels = input.int(4, "Maximum channels", minval = 1, maxval = 8, group = G_SR)
+int srLookback = input.int(200, "Pivot / touch lookback", minval = 100, maxval = 400, group = G_SR)
+bool showSRBreaks = input.bool(false, "Show channel breaks", group = G_SR)
+color srResistanceColor = input.color(color.new(color.red, 78), "Resistance", inline = "src", group = G_SR)
+color srSupportColor = input.color(color.new(color.lime, 78), "Support", inline = "src", group = G_SR)
+color srInsideColor = input.color(color.new(color.gray, 80), "Inside", inline = "src", group = G_SR)
+float srHiSrc = srSourceChoice == "High/Low" ? high : math.max(open, close)
+float srLoSrc = srSourceChoice == "High/Low" ? low : math.min(open, close)
+float srPH = ta.pivothigh(srHiSrc, srPivotPeriod, srPivotPeriod)
+float srPL = ta.pivotlow(srLoSrc, srPivotPeriod, srPivotPeriod)
+bool newSrPivot = not na(srPH) or not na(srPL)
+float range300 = ta.highest(high, 300) - ta.lowest(low, 300)
+float srMaxWidth = srWidthMode == "ATR" ? ta.atr(14) * srAtrWidth : range300 * srRangeWidthPct / 100.0
+var pivotVals = array.new_float()
+var pivotBars = array.new_int()
+var srLevels = array.new_float(16, na)
+var srBoxes = array.new_box(8)
+if showSR and newSrPivot
+    float newPivotValue = not na(srPH) ? srPH : srPL
+    array.unshift(pivotVals, newPivotValue)
+    array.unshift(pivotBars, bar_index - srPivotPeriod)
+    while array.size(pivotBars) > 0 and (bar_index - array.get(pivotBars, array.size(pivotBars) - 1) > srLookback or array.size(pivotBars) > 80)
+        array.pop(pivotBars)
+        array.pop(pivotVals)
+    int pivotCount = array.size(pivotVals)
+    candidateScore = array.new_float(pivotCount, -1.0)
+    candidateHi = array.new_float(pivotCount, na)
+    candidateLo = array.new_float(pivotCount, na)
+    if pivotCount > 0
+        for i = 0 to pivotCount - 1
+            float lo = array.get(pivotVals, i)
+            float hi = lo
+            int included = 0
+            for j = 0 to pivotCount - 1
+                float p = array.get(pivotVals, j)
+                float testLo = math.min(lo, p)
+                float testHi = math.max(hi, p)
+                if testHi - testLo <= srMaxWidth
+                    lo := testLo
+                    hi := testHi
+                    included += 1
+            float touches = 0.0
+            int newestPivotBar = -1
+            for j = 0 to pivotCount - 1
+                float p = array.get(pivotVals, j)
+                if p >= lo and p <= hi
+                    newestPivotBar := math.max(newestPivotBar, array.get(pivotBars, j))
+            for k = 0 to srLookback
+                if (high[k] >= lo and high[k] <= hi) or (low[k] >= lo and low[k] <= hi)
+                    touches += 1.0
+            float midpoint = (hi + lo) / 2.0
+            float distancePct = close != 0.0 ? math.abs(midpoint / close - 1.0) * 100.0 : 100.0
+            float proximityScore = math.max(0.0, 25.0 * (1.0 - distancePct / 20.0))
+            float ageBars = newestPivotBar >= 0 ? bar_index - newestPivotBar : srLookback
+            float recencyScore = math.max(0.0, 25.0 * (1.0 - ageBars / srLookback))
+            float touchScore = math.min(touches, 8.0) * 1.5
+            float scoreCandidate = included >= srMinPivots ? included * 20.0 + touchScore + recencyScore + proximityScore : -1.0
+            array.set(candidateScore, i, scoreCandidate)
+            array.set(candidateHi, i, hi)
+            array.set(candidateLo, i, lo)
+    array.fill(srLevels, na)
+    for slot = 0 to srMaxChannels - 1
+        float bestScore = -1.0
+        int bestIndex = -1
+        if pivotCount > 0
+            for i = 0 to pivotCount - 1
+                float candidate = array.get(candidateScore, i)
+                if candidate > bestScore
+                    bestScore := candidate
+                    bestIndex := i
+        if bestIndex >= 0 and bestScore >= 0
+            float bestHi = array.get(candidateHi, bestIndex)
+            float bestLo = array.get(candidateLo, bestIndex)
+            array.set(srLevels, slot * 2, bestHi)
+            array.set(srLevels, slot * 2 + 1, bestLo)
+            for i = 0 to pivotCount - 1
+                float cHi = array.get(candidateHi, i)
+                float cLo = array.get(candidateLo, i)
+                if not na(cHi) and not na(cLo) and cHi >= bestLo and cLo <= bestHi
+                    array.set(candidateScore, i, -1.0)
+
+if barstate.islast
+    for i = 0 to 7
+        box oldBox = array.get(srBoxes, i)
+        if not na(oldBox)
+            box.delete(oldBox)
+            array.set(srBoxes, i, na)
+        if showSR and i < srMaxChannels
+            float topLevel = array.get(srLevels, i * 2)
+            float bottomLevel = array.get(srLevels, i * 2 + 1)
+            if not na(topLevel) and not na(bottomLevel)
+                color channelColor = bottomLevel > close ? srResistanceColor : topLevel < close ? srSupportColor : srInsideColor
+                box newBox = box.new(bar_index, topLevel, bar_index + 1, bottomLevel, border_color = channelColor, bgcolor = channelColor, extend = extend.both)
+                array.set(srBoxes, i, newBox)
+
+bool resistanceBroken = false
+bool supportBroken = false
+bool priceInsideAnyChannel = false
+if showSR
+    for i = 0 to srMaxChannels - 1
+        float topLevel = array.get(srLevels, i * 2)
+        float bottomLevel = array.get(srLevels, i * 2 + 1)
+        if not na(topLevel) and not na(bottomLevel) and close <= topLevel and close >= bottomLevel
+            priceInsideAnyChannel := true
+    if not priceInsideAnyChannel
+        for i = 0 to srMaxChannels - 1
+            float topLevel = array.get(srLevels, i * 2)
+            float bottomLevel = array.get(srLevels, i * 2 + 1)
+            if not na(topLevel) and not na(bottomLevel)
+                resistanceBroken := resistanceBroken or (barstate.isconfirmed and close[1] <= topLevel and close > topLevel)
+                supportBroken := supportBroken or (barstate.isconfirmed and close[1] >= bottomLevel and close < bottomLevel)
+plotshape(showSRBreaks and resistanceBroken, "Resistance broken", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
+plotshape(showSRBreaks and supportBroken, "Support broken", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny)
+
+float nearestResistance = na
+float nearestSupport = na
+float nearestSupportStop = na
+if showSR
+    for i = 0 to srMaxChannels - 1
+        float topLevel = array.get(srLevels, i * 2)
+        float bottomLevel = array.get(srLevels, i * 2 + 1)
+        if not na(topLevel) and not na(bottomLevel)
+            if bottomLevel > close
+                nearestResistance := na(nearestResistance) ? bottomLevel : math.min(nearestResistance, bottomLevel)
+            if topLevel < close
+                if na(nearestSupport) or topLevel > nearestSupport
+                    nearestSupport := topLevel
+                    nearestSupportStop := bottomLevel
+
+bool showRiskHelper = input.bool(false, "Enable execution-plan helper", group = G_RISK)
+string riskEntryMode = input.string("Current close", "Entry", options = ["Current close", "Custom"], group = G_RISK)
+float riskCustomEntry = input.float(0.0, "Custom entry price (0 = current close)", minval = 0.0, step = 0.01, group = G_RISK)
+string riskStopMode = input.string("Nearest support zone low", "Stop reference", options = ["Nearest support zone low", "Last confirmed pivot low", "Custom"], group = G_RISK)
+float riskCustomStop = input.float(0.0, "Custom stop price", minval = 0.0, step = 0.01, group = G_RISK)
+string riskTargetMode = input.string("Nearest resistance", "Target reference", options = ["Nearest resistance", "Custom"], group = G_RISK)
+float riskCustomTarget = input.float(0.0, "Custom target price", minval = 0.0, step = 0.01, group = G_RISK)
+float riskTooTightATR = input.float(0.8, "Too-tight threshold, ATR", minval = 0.25, maxval = 2.0, step = 0.05, group = G_RISK)
+float riskProbeATR = input.float(1.2, "Probe upper band, ATR", minval = 0.5, maxval = 3.0, step = 0.05, group = G_RISK)
+float riskMaxStopPct = input.float(8.0, "Normal-swing max stop %", minval = 3.0, maxval = 12.0, step = 0.5, group = G_RISK)
+float riskMinR = input.float(2.5, "Minimum normal-swing R", minval = 1.0, maxval = 5.0, step = 0.25, group = G_RISK)
+float plannedEntry = riskEntryMode == "Custom" and riskCustomEntry > 0.0 ? riskCustomEntry : close
+float plannedStop = riskStopMode == "Custom" ? riskCustomStop : riskStopMode == "Last confirmed pivot low" ? lastPivotLow : nearestSupportStop
+float plannedTarget = riskTargetMode == "Custom" ? riskCustomTarget : nearestResistance
+float plannedRisk = not na(plannedStop) ? plannedEntry - plannedStop : na
+float stopPct = not na(plannedRisk) and plannedEntry > 0.0 ? plannedRisk / plannedEntry * 100.0 : na
+float stopATR = not na(plannedRisk) and dAtr14 > 0.0 ? plannedRisk / dAtr14 : na
+float reward = not na(plannedTarget) ? plannedTarget - plannedEntry : na
+float availableR = not na(plannedRisk) and plannedRisk > 0.0 and not na(reward) ? reward / plannedRisk : na
+string stopQuality = na(plannedStop) or plannedStop <= 0.0 ? "NO STOP" : plannedStop >= plannedEntry ? "INVALID" : stopPct > riskMaxStopPct ? "TOO WIDE" : stopATR < riskTooTightATR ? "TOO TIGHT" : stopATR <= riskProbeATR ? "PROBE BAND" : "VALID"
+string rrQuality = na(availableR) ? "NO TARGET" : availableR < riskMinR ? "INSUFFICIENT" : "PASS"
+
+bool showDashboard = input.bool(true, "Show dashboard", group = G_DASH)
+string dashboardPosition = input.string("Top Right", "Dashboard position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = G_DASH)
+dashPos = dashboardPosition == "Top Left" ? position.top_left : dashboardPosition == "Bottom Right" ? position.bottom_right : dashboardPosition == "Bottom Left" ? position.bottom_left : position.top_right
+var table dash = table.new(dashPos, 2, 15, border_width = 1, frame_width = 1)
+float lowOfDayDistanceAtr = dAtr14 > 0.0 ? (close - dLow) / dAtr14 : na
+string extUnitLabel = extensionMetric == "ADR" ? " ADR" : " ATR"
+string structureState = resistanceBroken ? "R BREAK" : supportBroken ? "S BREAK" : priceInsideAnyChannel ? "IN CHANNEL" : weeklyTight ? "3W TIGHT" : insideDay ? "INSIDE" : "NORMAL"
+if barstate.islast and showDashboard
+    table.cell(dash, 0, 0, "SST v2", text_color = color.white, bgcolor = color.new(color.blue, 35))
+    table.cell(dash, 1, 0, timeframe.period, text_color = color.white, bgcolor = color.new(color.blue, 35))
+    table.cell(dash, 0, 1, "Daily ADR20%", text_color = chart.fg_color)
+    table.cell(dash, 1, 1, f_fmt(dAdr20Pct) + "%", text_color = chart.fg_color)
+    table.cell(dash, 0, 2, "Daily ATR14", text_color = chart.fg_color)
+    table.cell(dash, 1, 2, f_fmt(dAtr14), text_color = chart.fg_color)
+    table.cell(dash, 0, 3, "From daily LoD", text_color = chart.fg_color)
+    table.cell(dash, 1, 3, f_fmt(lowOfDayDistanceAtr) + " ATR", text_color = chart.fg_color)
+    table.cell(dash, 0, 4, "Extension", text_color = chart.fg_color)
+    table.cell(dash, 1, 4, f_fmtSigned(extensionUnits) + extUnitLabel, text_color = isExtreme ? color.red : isExtended ? color.orange : chart.fg_color)
+    table.cell(dash, 0, 5, "Trend template", text_color = chart.fg_color)
+    table.cell(dash, 1, 5, trendTemplate ? "PASS*" : "FAIL", text_color = trendTemplate ? color.lime : color.gray)
+    table.cell(dash, 0, 6, "Nearest R", text_color = chart.fg_color)
+    table.cell(dash, 1, 6, f_fmt(nearestResistance), text_color = color.orange)
+    table.cell(dash, 0, 7, "Nearest S", text_color = chart.fg_color)
+    table.cell(dash, 1, 7, f_fmt(nearestSupport), text_color = color.lime)
+    table.cell(dash, 0, 8, "Structure", text_color = chart.fg_color)
+    table.cell(dash, 1, 8, structureState, text_color = resistanceBroken ? color.lime : supportBroken ? color.red : chart.fg_color)
+    if showRiskHelper
+        float rewardPct = not na(reward) and plannedEntry > 0.0 ? reward / plannedEntry * 100.0 : na
+        table.cell(dash, 0, 9, "Plan stop", text_color = chart.fg_color)
+        table.cell(dash, 1, 9, f_fmt(plannedStop), text_color = stopQuality == "INVALID" or stopQuality == "TOO TIGHT" or stopQuality == "TOO WIDE" ? color.red : chart.fg_color)
+        table.cell(dash, 0, 10, "Stop % / ATR", text_color = chart.fg_color)
+        table.cell(dash, 1, 10, f_fmt(stopPct) + "% / " + f_fmt(stopATR) + "x", text_color = chart.fg_color)
+        table.cell(dash, 0, 11, "Stop quality", text_color = chart.fg_color)
+        table.cell(dash, 1, 11, stopQuality, text_color = stopQuality == "VALID" ? color.lime : stopQuality == "PROBE BAND" ? color.orange : color.red)
+        table.cell(dash, 0, 12, "Plan target", text_color = chart.fg_color)
+        table.cell(dash, 1, 12, f_fmt(plannedTarget), text_color = color.orange)
+        table.cell(dash, 0, 13, "Reward %", text_color = chart.fg_color)
+        table.cell(dash, 1, 13, f_fmt(rewardPct) + "%", text_color = chart.fg_color)
+        table.cell(dash, 0, 14, "Available R", text_color = chart.fg_color)
+        table.cell(dash, 1, 14, f_fmt(availableR) + "R / " + rrQuality, text_color = rrQuality == "PASS" ? color.lime : color.orange)
+    else
+        table.clear(dash, 0, 9, 1, 14)
+if barstate.islast and not showDashboard
+    table.clear(dash, 0, 0, 1, 14)
+
+bool confirmedChartBar = barstate.isconfirmed
+alertcondition(showInsideDays and confirmedChartBar and insideDay, "SST Inside Day", "{{ticker}} printed a confirmed inside bar.")
+alertcondition(showWeeklyTight and timeframe.isweekly and confirmedChartBar and weeklyTightLocal and not weeklyTightLocal[1], "SST Three-Week Tight", "{{ticker}} formed a confirmed three-week tight-close structure.")
+alertcondition(showExtension and confirmedChartBar and isExtended and not isExtended[1], "SST Extended", "{{ticker}} entered the selected extension threshold on a confirmed chart bar.")
+alertcondition(showExtension and confirmedChartBar and isExtreme and not isExtreme[1], "SST Extremely Extended", "{{ticker}} entered the extreme extension threshold on a confirmed chart bar.")
+alertcondition(showSR and resistanceBroken, "SST Resistance Broken", "{{ticker}} closed above a resistance channel on a confirmed chart bar.")
+alertcondition(showSR and supportBroken, "SST Support Broken", "{{ticker}} closed below a support channel on a confirmed chart bar.")

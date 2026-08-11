@@ -41,7 +41,7 @@ The app asks for keys the first time it needs them and saves them to `~/.hedge-f
 - A [Financial Datasets](https://financialdatasets.ai) API key, for prices, fundamentals, and earnings.
 - One LLM API key for the LLM-powered alpha models. Supported providers: Anthropic, OpenAI, DeepSeek, Google, xAI, Kimi, and Alibaba Cloud Model Studio (Qwen).
 
-Keys exported in your shell always win over the saved file.
+Keys exported in your shell always win over the saved file. Alibaba Cloud Model Studio also requires `DASHSCOPE_BASE_URL`, because its OpenAI-compatible endpoint is region/workspace-specific; copy the base URL for the same Model Studio region as your API key.
 
 ## How to Run
 

@@ -137,6 +137,16 @@ def make_llm(
             model=model, api_key=api_key, timeout=timeout, max_retries=1,
             base_url=(os.getenv("MOONSHOT_BASE_URL")
                       or "https://api.moonshot.ai/v1"))
+    elif provider == "Alibaba":
+        # Alibaba Cloud Model Studio exposes Qwen through an OpenAI-compatible
+        # Chat API. The legacy shared Singapore endpoint remains supported and
+        # keeps this client usable without a workspace id; production users can
+        # point DASHSCOPE_BASE_URL at their workspace-specific regional endpoint.
+        from langchain_openai import ChatOpenAI
+        chat = ChatOpenAI(
+            model=model, api_key=api_key, timeout=timeout, max_retries=1,
+            base_url=(os.getenv("DASHSCOPE_BASE_URL")
+                      or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"))
     else:  # pragma: no cover - SUPPORTED_PROVIDERS is checked above
         raise ValueError(f"Unhandled provider {provider}")
 

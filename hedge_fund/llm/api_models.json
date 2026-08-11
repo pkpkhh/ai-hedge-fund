@@ -30,6 +30,11 @@
     "provider": "OpenAI"
   },
   {
+    "display_name": "Qwen 3.7 Plus",
+    "model_name": "qwen3.7-plus",
+    "provider": "Alibaba"
+  },
+  {
     "display_name": "Kimi K2.6",
     "model_name": "kimi-k2.6",
     "provider": "Kimi"

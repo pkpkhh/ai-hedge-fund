@@ -39,7 +39,7 @@ aihf
 The app asks for keys the first time it needs them and saves them to `~/.hedge-fund/.env` — nothing to configure up front. It needs:
 
 - A [Financial Datasets](https://financialdatasets.ai) API key, for prices, fundamentals, and earnings.
-- One LLM API key for the LLM-powered alpha models. Supported providers: Anthropic, OpenAI, DeepSeek, Google, xAI, Kimi.
+- One LLM API key for the LLM-powered alpha models. Supported providers: Anthropic, OpenAI, DeepSeek, Google, xAI, Kimi, and Alibaba Cloud Model Studio (Qwen).
 
 Keys exported in your shell always win over the saved file.
 
